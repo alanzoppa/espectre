@@ -38,6 +38,7 @@
 #include "matter_bindings_esp_matter.h"
 #include "matter_commissioning_data.h"
 #include "matter_frontend.h"
+#include "neopixel_light.h"
 #include "primary_console.h"
 
 static const char *TAG = "espectre.matter.app";
@@ -84,6 +85,7 @@ void idf_log_write(void *, espectre::LogLevel level, const char *tag, int,
              tag, format, args);
 }
 uint16_t g_motion_endpoint_id = 0;
+uint16_t g_light_endpoint_id = 0;
 uint64_t g_device_id = 0U;
 espectre::PendingEvent<bool> g_commissioned_event;
 espectre::PendingEvent<> g_dnssd_initialized_event;
@@ -338,6 +340,13 @@ void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 esp_err_t app_identification_cb(identification::callback_type_t type, uint16_t endpoint_id, uint8_t effect_id,
                                 uint8_t effect_variant, void *priv_data) {
   ESP_LOGI(TAG, "Identify endpoint %u", endpoint_id);
+  if (endpoint_id == g_light_endpoint_id) {
+    if (type == identification::START) {
+      espectre::neopixel::identify_start(effect_id);
+    } else if (type == identification::STOP) {
+      espectre::neopixel::identify_stop();
+    }
+  }
   return ESP_OK;
 }
 
@@ -352,6 +361,45 @@ esp_err_t app_attribute_update_cb(attribute::callback_type_t type, uint16_t endp
                                    ? std::string{}
                                    : std::string(reinterpret_cast<const char *>(val->val.a.b), val->val.a.s));
     g_node_label_event.post();
+  }
+
+  // Extended color light endpoint: mirror attribute writes onto the NeoPixel.
+  if (type == attribute::POST_UPDATE && val != nullptr &&
+      endpoint_id == g_light_endpoint_id && espectre::neopixel::initialized()) {
+    if (cluster_id == OnOff::Id &&
+        attribute_id == OnOff::Attributes::OnOff::Id &&
+        val->type == ESP_MATTER_VAL_TYPE_BOOLEAN) {
+      espectre::neopixel::set_on(val->val.b);
+    } else if (cluster_id == LevelControl::Id &&
+               attribute_id == LevelControl::Attributes::CurrentLevel::Id &&
+               val->type == ESP_MATTER_VAL_TYPE_UINT8) {
+      espectre::neopixel::set_level(val->val.u8);
+    } else if (cluster_id == ColorControl::Id) {
+      if (attribute_id == ColorControl::Attributes::CurrentHue::Id &&
+          val->type == ESP_MATTER_VAL_TYPE_UINT8) {
+        espectre::neopixel::set_color_mode(0);
+        espectre::neopixel::set_hue_saturation(val->val.u8, espectre::neopixel::current_saturation());
+      } else if (attribute_id == ColorControl::Attributes::CurrentSaturation::Id &&
+                 val->type == ESP_MATTER_VAL_TYPE_UINT8) {
+        espectre::neopixel::set_color_mode(0);
+        espectre::neopixel::set_hue_saturation(espectre::neopixel::current_hue(), val->val.u8);
+      } else if (attribute_id == ColorControl::Attributes::CurrentX::Id &&
+                 val->type == ESP_MATTER_VAL_TYPE_UINT16) {
+        espectre::neopixel::set_color_mode(1);
+        espectre::neopixel::set_xy(val->val.u16, espectre::neopixel::current_y());
+      } else if (attribute_id == ColorControl::Attributes::CurrentY::Id &&
+                 val->type == ESP_MATTER_VAL_TYPE_UINT16) {
+        espectre::neopixel::set_color_mode(1);
+        espectre::neopixel::set_xy(espectre::neopixel::current_x(), val->val.u16);
+      } else if (attribute_id == ColorControl::Attributes::ColorTemperatureMireds::Id &&
+                 val->type == ESP_MATTER_VAL_TYPE_UINT16) {
+        espectre::neopixel::set_color_mode(2);
+        espectre::neopixel::set_color_temperature(val->val.u16);
+      } else if (attribute_id == ColorControl::Attributes::ColorMode::Id &&
+                 val->type == ESP_MATTER_VAL_TYPE_UINT8) {
+        espectre::neopixel::set_color_mode(val->val.u8);
+      }
+    }
   }
   return ESP_OK;
 }
@@ -542,6 +590,46 @@ extern "C" void app_main() {
   }
 
   g_motion_endpoint_id = endpoint::get_id(motion_endpoint);
+
+  // Extended color light endpoint backed by the WS2812 strip.
+  esp_err_t led_err = espectre::neopixel::init(CONFIG_ESPECTRE_MATTER_LED_GPIO,
+                                               CONFIG_ESPECTRE_MATTER_LED_COUNT);
+  if (led_err != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to initialize the NeoPixel driver (%s)", esp_err_to_name(led_err));
+    return;
+  }
+
+  extended_color_light::config_t light_config;
+  // The default extended_color_light factory wires only color_temperature
+  // and xy. Apple Home and Home Assistant drive hue/saturation, so add
+  // that feature explicitly (it also sets the ColorCapabilities bits).
+  light_config.color_control.color_mode = 0;  // hue/saturation
+  light_config.color_control_color_temperature.color_temperature_mireds = 250;
+  light_config.color_control_xy.current_x = 24939;  // ~ medium white
+  light_config.color_control_xy.current_y = 24701;
+  light_config.on_off.on_off = false;
+  light_config.level_control.current_level = 254;
+  light_config.level_control.start_up_current_level = 254;
+
+  endpoint_t *light_endpoint = extended_color_light::create(node, &light_config, ENDPOINT_FLAG_NONE, nullptr);
+  if (light_endpoint == nullptr) {
+    ESP_LOGE(TAG, "Failed to create light endpoint");
+    return;
+  }
+
+  cluster::color_control::feature::hue_saturation::config_t hue_sat_config;
+  hue_sat_config.current_hue = 0;
+  hue_sat_config.current_saturation = 0;
+  cluster_t *color_cluster = cluster::get(light_endpoint, ColorControl::Id);
+  if (color_cluster == nullptr ||
+      cluster::color_control::feature::hue_saturation::add(color_cluster, &hue_sat_config) != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to add hue/saturation feature to the color control cluster");
+    return;
+  }
+
+  g_light_endpoint_id = endpoint::get_id(light_endpoint);
+  ESP_LOGI(TAG, "Light endpoint %u created (gpio %d, %d leds)", g_light_endpoint_id,
+           CONFIG_ESPECTRE_MATTER_LED_GPIO, CONFIG_ESPECTRE_MATTER_LED_COUNT);
 
   static espectre::EspIdfDirectHttpService direct_service;
   static espectre::MdnsDiscoveryService mdns_discovery;

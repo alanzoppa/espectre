@@ -8,4 +8,19 @@ config ESPECTRE_MATTER_NODE_LABEL
     help
         Optional user-facing label exposed through the Matter Basic Information cluster.
 
+config ESPECTRE_MATTER_LED_COUNT
+    int "Number of LEDs on the extended color light endpoint"
+    range 1 1024
+    default 1
+    help
+        Number of WS2812 (NeoPixel) LEDs wired to the light endpoint.
+
+config ESPECTRE_MATTER_LED_GPIO
+    int "GPIO driving the WS2812 data line"
+    range 0 48
+    default 1
+    help
+        GPIO used as the data line for the WS2812 strip. Default 1 (D0/A0
+        on the Seeed XIAO ESP32-S3), a safe general-purpose pin.
+
 endmenu

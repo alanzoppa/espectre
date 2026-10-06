@@ -3,6 +3,7 @@ idf_component_register(
         "app_main.cpp"
         "matter_bindings_esp_matter.cpp"
         "matter_commissioning_data.cpp"
+        "neopixel_light.cpp"
     INCLUDE_DIRS
         "."
         "../../espectre"
@@ -14,6 +15,7 @@ idf_component_register(
         esp_partition
         log
         nvs_flash
+        driver
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE "-DCHIP_HAVE_CONFIG_H")

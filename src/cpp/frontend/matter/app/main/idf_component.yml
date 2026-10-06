@@ -4,3 +4,6 @@ dependencies:
     version: ">=5.5.0"
   espressif/esp_matter:
     version: "1.6.0"
+  espressif/led_strip:
+    version: "^2.5.5"
+    public: true
