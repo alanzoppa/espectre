@@ -609,7 +609,7 @@ extern "C" void app_main() {
   light_config.color_control_xy.current_y = 24701;
   light_config.on_off.on_off = false;
   light_config.level_control.current_level = 254;
-  light_config.level_control.start_up_current_level = 254;
+  light_config.level_control_lighting.start_up_current_level = 254;
 
   endpoint_t *light_endpoint = extended_color_light::create(node, &light_config, ENDPOINT_FLAG_NONE, nullptr);
   if (light_endpoint == nullptr) {
